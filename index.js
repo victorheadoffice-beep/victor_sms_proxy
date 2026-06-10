@@ -2,6 +2,15 @@ const express = require("express");
 const app = express();
 app.use(express.json());
 
+// CORS — browser থেকে সরাসরি call করার জন্য
+app.use(function(req, res, next) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
+
 const API_KEY   = "C300054864c761b9023510.16858542";
 const SENDER_ID = "VICTOR";
 
@@ -22,5 +31,6 @@ app.post("/send-otp", async (req, res) => {
 });
 
 app.get("/", (req, res) => res.send("Victor SMS Proxy — Online"));
+app.get("/ping", (req, res) => res.send("pong"));
 
 app.listen(process.env.PORT || 3000, () => console.log("SMS Proxy running"));
