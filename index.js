@@ -24,7 +24,12 @@ app.post("/send-otp", async (req, res) => {
   try {
   const r    = await fetch(url);
   const text = await r.text();
-  res.json({ status: "OK", raw: text, msgid: text.trim() });
+
+  // "SMS SUBMITTED: ID - bw-rdXXXXXXXX" থেকে শুধু ID অংশ বের করা
+  const match = text.match(/ID\s*-\s*(\S+)/i);
+  const extractedId = match ? match[1] : text.trim();
+
+  res.json({ status: "OK", raw: text, msgid: extractedId });
 } catch (e) {
   res.json({ status: "ERROR", error: e.message });
 }
