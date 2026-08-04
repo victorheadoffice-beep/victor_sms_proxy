@@ -22,12 +22,12 @@ app.post("/send-otp", async (req, res) => {
   const url = `https://sms.mram.com.bd/smsapi?api_key=${API_KEY}&type=text&contacts=${mobile}&senderid=${SENDER_ID}&msg=${encodeURIComponent(msg)}`;
 
   try {
-    const r    = await fetch(url);
-    const text = await r.text();
-    res.json({ status: "OK", raw: text });
-  } catch (e) {
-    res.json({ status: "ERROR", error: e.message });
-  }
+  const r    = await fetch(url);
+  const text = await r.text();
+  res.json({ status: "OK", raw: text, msgid: text.trim() });
+} catch (e) {
+  res.json({ status: "ERROR", error: e.message });
+}
 });
 
 app.get("/", (req, res) => res.send("Victor SMS Proxy — Online"));
