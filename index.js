@@ -11,7 +11,7 @@ app.use(function(req, res, next) {
   next();
 });
 
-const API_KEY   = "C30005486a71785e35cac1.32484579";
+const API_KEY   = "C300054864c761b9023510.16858542";
 const SENDER_ID = "VICTOR";
 
 app.post("/send-otp", async (req, res) => {
