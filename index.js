@@ -27,11 +27,16 @@ function log() {
   console.log.apply(console, [new Date().toISOString()].concat(args));
 }
 
-/* ফোন নম্বর সবসময় "880XXXXXXXXXX" ফরম্যাটে MRAM-কে পাঠানো হচ্ছে কিনা নিশ্চিত করা */
+/* ফোন নম্বর সবসময় "880XXXXXXXXXX" ফরম্যাটে MRAM-কে পাঠানো হচ্ছে কিনা নিশ্চিত করা।
+   কিছু sheet row-এ leading zero ছাড়া নম্বর সেভ হয়ে গেছে (যেমন "1770139700"
+   এর বদলে হওয়ার কথা ছিল "01770139700") — BD মোবাইল নম্বর সবসময়
+   01[3-9]XXXXXXXX প্যাটার্নে হয়, তাই ১০ সংখ্যার এমন নম্বর পেলে এখানেও
+   auto-correct করা হচ্ছে (Code.gs-এ একই ফিক্স আছে, এটা দ্বিতীয় স্তরের সুরক্ষা)। */
 function normalizeApiMobile(raw) {
   var digits = String(raw || "").replace(/[^0-9]/g, "");
   if (digits.indexOf("880") === 0 && digits.length === 13) return digits;
   if (digits.indexOf("0") === 0 && digits.length === 11) return "880" + digits.substring(1);
+  if (digits.length === 10 && /^1[3-9]/.test(digits)) return "880" + digits; // missing leading 0
   return digits;
 }
 
