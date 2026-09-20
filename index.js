@@ -17,11 +17,14 @@ app.use(function (req, res, next) {
 const API_KEY   = process.env.MRAM_API_KEY || "C300054864c761b9023510.16858542";
 const SENDER_ID = process.env.MRAM_SENDER_ID || "VICTOR";
 
-const MAX_TRIES   = 3;     // MRAM কে সর্বোচ্চ কতবার চেষ্টা করবে
-const TIMEOUT_MS  = 12000; // একেকটা চেষ্টার জন্য সর্বোচ্চ অপেক্ষা (cold start কভার করার মতো যথেষ্ট)
-const RETRY_DELAY = 1500;  // দুই চেষ্টার মাঝে বিরতি
+// v7.0 Code.gs অনুযায়ী: OTP এখন ONE ATTEMPT-এই পাঠানো হয়, এই proxy লেয়ারে
+// কোনো retry/cooldown/lock নেই। এই timeout-টা শুধু "কতক্ষণ MRAM-এর উত্তরের
+// জন্য অপেক্ষা করবো" সেটা ঠিক করে — এখানে retry করলে MRAM-এ প্রথম SMS আসলে
+// চলে গিয়ে থাকলেও দ্বিতীয়টা আবার পাঠানো হয়ে যেতে পারে (duplicate SMS)।
+// Code.gs নিজেই এই একই কারণে server-side retry বাদ দিয়েছে — এই proxy সেই
+// একই contract মেনে চলছে।
+const TIMEOUT_MS = 15000;
 
-function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 function log() {
   var args = Array.prototype.slice.call(arguments);
   console.log.apply(console, [new Date().toISOString()].concat(args));
@@ -40,7 +43,7 @@ function normalizeApiMobile(raw) {
   return digits;
 }
 
-/* MRAM কে একবার কল করে raw text ফেরত দেয়, timeout/network এ throw করে */
+/* MRAM-কে একবার কল করে raw text ফেরত দেয়, timeout/network এ throw করে */
 async function callMram(url) {
   var controller = new AbortController();
   var timer = setTimeout(function () { controller.abort(); }, TIMEOUT_MS);
@@ -55,7 +58,7 @@ async function callMram(url) {
 }
 
 /* MRAM অনেক সময় HTTP 200 দিয়েই ভেতরে error message পাঠায় (balance শেষ,
-   invalid number ইত্যাদি) — আগের কোড সেটাকেও "OK" ধরে নিত। এখানে
+   invalid number ইত্যাদি) — সেটাকে "OK" ধরে নেওয়া যাবে না। এখানে
    আসলেই SMS জমা হয়েছে কিনা যাচাই করা হচ্ছে। */
 function mramReplyLooksSuccessful(text) {
   var t = String(text || "");
@@ -85,38 +88,36 @@ app.post("/send-otp", async function (req, res) {
     "https://sms.mram.com.bd/smsapi?api_key=" + API_KEY + "&type=text" +
     "&contacts=" + apiMobile + "&senderid=" + SENDER_ID + "&msg=" + encodeURIComponent(msg);
 
-  var lastErr = null;
+  // ── ONE ATTEMPT ONLY — কোনো retry loop নেই (দেখো উপরের TIMEOUT_MS নোট) ──
+  try {
+    log("send-otp -> " + apiMobile);
+    var text = await callMram(url);
+    log("MRAM raw reply:", text);
 
-  for (var attempt = 1; attempt <= MAX_TRIES; attempt++) {
-    try {
-      log("send-otp attempt " + attempt + "/" + MAX_TRIES + " -> " + apiMobile);
-      var text = await callMram(url);
-      log("MRAM raw reply:", text);
-
-      if (!mramReplyLooksSuccessful(text)) {
-        // HTTP 200 কিন্তু MRAM নিজেই বলছে পাঠাতে পারেনি (ব্যালেন্স/নম্বর সমস্যা)
-        // — এটা retry করলে ঠিক হবে না, তাই সাথে সাথে থেমে আসল কারণ ফেরত দেওয়া হচ্ছে।
-        log("MRAM reported failure inside 200 response — not retrying");
-        return res.json({ status: "ERROR", error: "MRAM: " + text.slice(0, 200), raw: text });
-      }
-
-      var match = text.match(/ID\s*-\s*(\S+)/i);
-      var extractedId = match ? match[1] : text.trim();
-      return res.json({ status: "OK", raw: text, msgid: extractedId });
-
-    } catch (e) {
-      lastErr = e;
-      var isTimeout = e.name === "AbortError";
-      log("attempt " + attempt + " failed:", isTimeout ? "TIMEOUT after " + TIMEOUT_MS + "ms" : e.message);
-      if (attempt < MAX_TRIES) await sleep(RETRY_DELAY);
+    if (!mramReplyLooksSuccessful(text)) {
+      // HTTP 200 কিন্তু MRAM নিজেই বলছে পাঠাতে পারেনি (ব্যালেন্স/নম্বর সমস্যা)।
+      // Code.gs এটাকে MRAM_REJECTED হিসেবে classify করবে (HTTP 200 রাখা হচ্ছে
+      // ইচ্ছাকৃতভাবে, যাতে PROXY_DOWN বলে ভুল classify না হয়)।
+      log("MRAM reported failure inside 200 response");
+      return res.json({ status: "ERROR", error: "MRAM: " + text.slice(0, 200), raw: text });
     }
-  }
 
-  log("send-otp — all attempts failed for", apiMobile, lastErr && lastErr.message);
-  return res.status(502).json({
-    status: "ERROR",
-    error: (lastErr && lastErr.message) || ("unknown network error after " + MAX_TRIES + " attempts")
-  });
+    var match = text.match(/ID\s*-\s*(\S+)/i);
+    var extractedId = match ? match[1] : text.trim();
+    return res.json({ status: "OK", raw: text, msgid: extractedId });
+
+  } catch (e) {
+    var isTimeout = e.name === "AbortError";
+    log("send-otp failed:", isTimeout ? "TIMEOUT after " + TIMEOUT_MS + "ms" : e.message);
+    // 502/503/504/429/0 — এই যেকোনো একটা status দিলেই Code.gs (sendSmsViaProxy)
+    // একে PROXY_DOWN হিসেবে ধরে নেয়, যেটা সঠিক: proxy MRAM-এ পৌঁছাতে পারেনি।
+    return res.status(502).json({
+      status: "ERROR",
+      error: isTimeout
+        ? "MRAM request timed out after " + TIMEOUT_MS + "ms"
+        : (e.message || "unknown network error")
+    });
+  }
 });
 
 app.get("/", function (req, res) { res.send("Victor SMS Proxy — Online"); });
